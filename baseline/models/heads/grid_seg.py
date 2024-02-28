@@ -9,6 +9,11 @@ import numpy as np
 
 from baseline.models.registry import HEADS
 
+from torch.utils.tensorboard import SummaryWriter
+
+import os
+from datetime import datetime
+
 @HEADS.register_module
 class GridSeg(nn.Module):
     
@@ -16,7 +21,11 @@ class GridSeg(nn.Module):
                 num_1=1024,
                 num_2=2048,
                 num_classes=7,
-                cfg=None):
+                cfg=None,
+                focal_loss_alpha = None,
+                focal_loss_gamma = None,
+                tensorboard_dir = ".",
+                image_size = None):
         super(GridSeg, self).__init__()
         self.cfg=cfg
         
@@ -32,14 +41,44 @@ class GridSeg(nn.Module):
             nn.Conv2d(num_2, num_classes, 1)
         )
 
+        self.num_classes = num_classes
+
+        self.focal_loss_alpha = focal_loss_alpha
+        self.focal_loss_gamma = focal_loss_gamma
+
+        self.tensorboard_dir = tensorboard_dir + "/tensorboard_log_{}/".format( str( datetime.now() ))
+
+        os.makedirs( self.tensorboard_dir , exist_ok= True)
+
+        self.tensorboard_writer = SummaryWriter( log_dir= self.tensorboard_dir )
+
+        self.step = 0
+
+        self.image_size = image_size
+
+
+
     def forward(self, x):
         conf_output = self.act_sigmoid(self.conf_predictor(x))
         class_output = self.class_predictor(x)
+
+        #print( "Shape of the Confidence output is : {} and Class Output is : {}".format( conf_output.shape , class_output.shape ))
+
+        if self.image_size :
+            # Upsampling the output to make same with Road Detection map labels
+            if conf_output.shape[ 2 : 4] != self.image_size :
+
+                conf_output = nn.Upsample( self.image_size , mode= "nearest")( conf_output )
+
+            if class_output.shape[ 2 : 4] != self.image_size :
+
+                class_output = nn.Upsample( self.image_size , mode="nearest" )( class_output )
 
         out = torch.cat((class_output, conf_output), 1)
         
         return out
 
+    """
     def label_formatting(self, raw_label):
         # Output image: top-left of the image is farthest-left
         num_of_labels = len(raw_label)
@@ -71,20 +110,130 @@ class GridSeg(nn.Module):
             label_tensor[k,:,:,:] = np.transpose(label_temp, (2, 0, 1))
 
         return(torch.tensor(label_tensor))
+    """
+    
+    def label_formatting(self, raw_label, is_get_label_as_tensor = True , new_image_size = None):
+        # Output image: top-left of the image is farthest-left
+        num_of_labels = len(raw_label)
+        if new_image_size :
+            label_tensor = np.zeros((num_of_labels, 2, new_image_size[0], new_image_size[1] ), dtype = np.longlong)
+        else : 
+            label_tensor = np.zeros((num_of_labels, 2, self.row_size, self.row_size), dtype = np.longlong)
+
+        for k in range(num_of_labels):
+
+            if new_image_size :
+
+                #print( "Upsampling image BEV detection to : " + str( new_image_size ))
+
+                row_size = new_image_size[0]
+                column_size = new_image_size[1]
+                label_temp = np.zeros((row_size,column_size,2), dtype = np.longlong)
+                label_data = raw_label[k]
+
+                #print( "Label data is : {} with total drivable area : {}".format( str( label_data ) , torch.sum( label_data ) ))
+
+                for i in range( row_size ):
+                    for j in range( column_size ):
+
+                        y_idx = row_size - i - 1
+                        x_idx = column_size - j - 1
+
+                        line_num = int(label_data[i][j])
+                        if line_num == 255:
+                            label_temp[y_idx][x_idx][1] = 0
+                            # classification
+                            label_temp[y_idx][x_idx][0] = 1 #6 
+                        else: # class
+                            # confidence
+                            label_temp[y_idx][x_idx][1] = 1
+                            # classification
+                            label_temp[y_idx][x_idx][0] = line_num
+
+                label_tensor[k,:,:,:] = np.transpose(label_temp, (2, 0, 1))
+            else :
+
+                label_temp = np.zeros((self.row_size,self.row_size,2), dtype = np.longlong)
+                label_data = raw_label[k]
+
+                for i in range(self.row_size):
+                    for j in range(self.row_size):
+
+                        y_idx = self.row_size - i - 1
+                        x_idx = self.row_size - j - 1
+
+                        line_num = int(label_data[i][j])
+                        if line_num == 255:
+                            label_temp[y_idx][x_idx][1] = 0
+                            # classification
+                            label_temp[y_idx][x_idx][0] = 6
+                        else: # class
+                            # confidence
+                            label_temp[y_idx][x_idx][1] = 1
+                            # classification
+                            label_temp[y_idx][x_idx][0] = line_num
+                
+
+        if is_get_label_as_tensor:
+            return torch.tensor(label_tensor)
+        else:
+            return label_tensor
     
     def loss(self, out, batch):
         train_label = batch['label']
-        lanes_label = train_label[:,:, :144]
-        lanes_label = self.label_formatting(lanes_label) #channel0 = line number, channel1 = confidence
 
-        y_pred_cls = out[:, 0:7, :, :]
-        y_pred_conf = out[:, 7, :, :]
+        # Change drivable area label to K- Lane line format
+
+        if torch.max( train_label ) != 255 :
+
+            #print( "Changing drivable area label to K-Lane drivable area label format")
+
+            train_label[ train_label == 0 ] = 255
+            train_label[ train_label == 1 ] = 0
+            
+        #lanes_label = train_label[:,:, :144]
+        lanes_label = train_label[:,:, :]
+        lanes_label = self.label_formatting(lanes_label ,  new_image_size = train_label.shape[1 : 3] ) #channel0 = line number, channel1 = confidence
+
+        #y_pred_cls = out[:, 0:7, :, :]
+        #y_pred_conf = out[:, 7, :, :]
+
+        y_pred_cls = out[:, 0:1, :, :]
+        y_pred_conf = out[:, 1, :, :]
+
+        
+
 
         y_label_cls = lanes_label[:, 0, :, :].cuda()
         y_label_conf = lanes_label[:, 1, :, :].cuda()
 
+        if y_pred_cls.shape[ 2 ] != y_label_cls.shape[ 1 ] :
+
+            #print( "Dimension of Road detection prediction before upsampling : {} ".format( y_pred_cls.shape ))
+
+            y_pred_cls = nn.Upsample( size= y_label_cls.shape[ 1 : 3 ], mode="nearest" )( y_pred_cls )
+
+            #print( "Dimension of Road detection prediction after upsampling : {}".format( y_pred_cls.shape ))
+
+        if y_pred_conf.shape[ 2 ] != y_label_conf.shape[ 1 ] :
+
+            y_pred_conf = nn.Upsample( size = y_label_conf.shape[ 1 : 3 ] , mode="nearest" )( torch.unsqueeze( y_pred_conf , dim= 0 ) )
+
         cls_loss = 0
-        cls_loss += nn.CrossEntropyLoss()(y_pred_cls, y_label_cls)
+
+        if self.num_classes >= 3 :
+            cls_loss += nn.CrossEntropyLoss()(y_pred_cls.cpu(), y_label_cls.cpu())
+        else :
+
+            if self.focal_loss_alpha : 
+                cross_entropy_loss = nn.BCEWithLogitsLoss()(torch.squeeze( y_pred_cls ).float(), torch.squeeze( y_label_cls ).float())
+                pt = torch.exp(-cross_entropy_loss) # prevents nans when probability 0
+                F_loss = (1-pt)**self.focal_loss_gamma * cross_entropy_loss
+                cls_loss += F_loss
+
+            else :
+                cls_loss += nn.BCELoss()(y_pred_cls.cpu(), y_label_cls.cpu())
+
 
         ## Dice Loss ###
         numerator = 2 * torch.sum(torch.mul(y_pred_conf, y_label_conf))
@@ -95,6 +244,12 @@ class GridSeg(nn.Module):
         loss = conf_loss + cls_loss
 
         ret = {'loss': loss, 'loss_stats': {'conf': conf_loss, 'cls': cls_loss}}
+
+        self.tensorboard_writer.add_scalar( "Total_Loss/Train", loss , self.step )
+        self.tensorboard_writer.add_scalar( "Confidence_Loss/Train", conf_loss , self.step )
+        self.tensorboard_writer.add_scalar( "Classification_Loss/Train", cls_loss , self.step )
+
+        self.step = self.step + 1
 
         return ret
 
@@ -135,6 +290,8 @@ class GridSeg(nn.Module):
         batch_size = len(output['conf'])
         for batch_idx in range(batch_size):
             cls_label = data['label'][batch_idx].cpu().numpy()
+
+            print( "Shape of the Label is " + str( cls_label.shape ))
             conf_label = np.where(cls_label == 255, 0, 1)
 
             conf_pred_raw = output['conf'][batch_idx].cpu().numpy()
@@ -143,6 +300,7 @@ class GridSeg(nn.Module):
             conf_pred = np.where(conf_pred_raw > self.cfg.conf_thr, 1, 0)
             cls_pred_raw = torch.nn.functional.softmax(output['cls'][batch_idx], dim=0)
             cls_pred_raw = cls_pred_raw.cpu().numpy()
+            print( "Shape of the Predicted Label is : " + str( cls_pred_raw.shape ))
             if is_flip:
                 cls_pred_raw = np.flip(np.flip(cls_pred_raw, 1),2)
             cls_idx = np.argmax(cls_pred_raw, axis=0)

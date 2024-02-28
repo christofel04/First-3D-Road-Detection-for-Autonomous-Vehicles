@@ -7,17 +7,17 @@ import numpy as np
 
 EPS = 1e-16
 
-def calc_measures(arr_label, arr_pred, mode = 'conf', is_wo_offset = False):
+def calc_measures(arr_label, arr_pred, mode = 'conf', is_wo_offset = False , image_size = [144,144]):
     if mode == 'conf':
         if is_wo_offset:
-            TP, FP, FN, TN = calc_measures_conf_wo_offset(arr_label, arr_pred)
+            TP, FP, FN, TN = calc_measures_conf_wo_offset(arr_label, arr_pred , image_size= image_size)
         else:
-            TP, FP, FN, TN = calc_measures_conf(arr_label, arr_pred)
+            TP, FP, FN, TN = calc_measures_conf(arr_label, arr_pred , image_size= image_size)
     else:
         if is_wo_offset:
-            TP, FP, FN, TN = calc_measures_cls_wo_offset(arr_label, arr_pred)
+            TP, FP, FN, TN = calc_measures_cls_wo_offset(arr_label, arr_pred, image_size= image_size)
         else:
-            TP, FP, FN, TN = calc_measures_cls(arr_label, arr_pred)
+            TP, FP, FN, TN = calc_measures_cls(arr_label, arr_pred , image_size= image_size)
 
     # print(TP, FP, FN, TN)
 
@@ -28,7 +28,7 @@ def calc_measures(arr_label, arr_pred, mode = 'conf', is_wo_offset = False):
 
     return accuracy, precision, recall, f1
 
-def calc_measures_conf(arr_label, arr_pred):
+def calc_measures_conf(arr_label, arr_pred , image_size = [144,144]):
     '''
     * in : arr_label (np.array, float, 144x144)
     * in : arr_pred (np.array, float, 144x144)
@@ -45,8 +45,8 @@ def calc_measures_conf(arr_label, arr_pred):
     TP = 0
     FP = 0
     FN = 0
-    for row in range(1,143):
-        for col in range(1,143):
+    for row in range(1, image_size[0] - 1):
+        for col in range(1,image_size[1] - 1):
             label = 0
             pred = 0
             pred_enhanced = 0
@@ -89,11 +89,11 @@ def calc_measures_conf(arr_label, arr_pred):
                 if(label_enhanced == NOT_OCCUPIED):
                     FP += 1
 
-    TN = 144*144 - TP - FP - FN
+    TN = image_size[0]*image_size[1] - TP - FP - FN
     
     return TP, FP, FN, TN
 
-def calc_measures_conf_wo_offset(arr_label, arr_pred):
+def calc_measures_conf_wo_offset(arr_label, arr_pred , image_size = [144,144]):
     '''
     * in : arr_label (np.array, float, 144x144)
     * in : arr_pred (np.array, float, 144x144)
@@ -110,8 +110,8 @@ def calc_measures_conf_wo_offset(arr_label, arr_pred):
     TP = 0
     FP = 0
     FN = 0
-    for row in range(144):
-        for col in range(144):
+    for row in range(image_size[0]):
+        for col in range(image_size[1]):
             label = 0
             pred = 0
             pred_enhanced = 0
@@ -136,11 +136,11 @@ def calc_measures_conf_wo_offset(arr_label, arr_pred):
                 if(label_enhanced == NOT_OCCUPIED):
                     FP += 1
     
-    TN = 144*144 - TP - FP - FN
+    TN = image_size[0]*image_size[1] - TP - FP - FN
 
     return TP, FP, FN, TN
 
-def calc_measures_cls(arr_label, arr_pred):
+def calc_measures_cls(arr_label, arr_pred , image_size = [144, 144]):
     '''
     * in : arr_label (np.array, float, 144x144)
     * in : arr_pred (np.array, float, 144x144)
@@ -156,8 +156,8 @@ def calc_measures_cls(arr_label, arr_pred):
     FN = 0
     TN = 0
     # TP, FP, FN, #TN
-    for j in range(1,143):
-        for i in range(1,143):
+    for j in range(1,image_size[0] - 1):
+        for i in range(1,image_size[1] - 1):
             if not (temp_label[j,i] == 255): # Lane
                 is_tp = False
                 for jj in range(-1,2):
@@ -175,7 +175,7 @@ def calc_measures_cls(arr_label, arr_pred):
     
     return TP, FP, FN, TN
 
-def calc_measures_cls_wo_offset(arr_label, arr_pred):
+def calc_measures_cls_wo_offset(arr_label, arr_pred , image_size = [144, 144]):
     temp_label = arr_label.copy()
     temp_pred = arr_pred.copy()
 
@@ -185,8 +185,8 @@ def calc_measures_cls_wo_offset(arr_label, arr_pred):
     FN = 0
     TN = 0
     # TP, FP, FN, #TN
-    for j in range(144):
-        for i in range(144):
+    for j in range(image_size[0]):
+        for i in range(image_size[1]):
             if not (temp_label[j,i] == 255): # Lane
                 if temp_pred[j,i] == temp_label[j,i]:
                     TP += 1

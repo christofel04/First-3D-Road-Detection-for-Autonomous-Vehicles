@@ -89,8 +89,16 @@ class Runner(object):
             # self.recorder.step += 1
 
             # with torch.autograd.set_detect_anomaly(True):
-            data = self.to_cuda(data)
-            output = self.net(data)
+            data = self.to_cuda(data)#.type( torch.cuda.FloatTensor )
+
+            #print( "Data is : " + str( data ))
+            try :
+                output = self.net(data)
+            except :
+                data["pillars"] = data["pillars"].type( torch.cuda.FloatTensor )
+                data[ "pillar_indices" ] = data[ "pillar_indices" ].type( torch.cuda.FloatTensor )
+                output = self.net(data)
+            
             self.optimizer.zero_grad()
             loss = output['loss']
 
@@ -128,7 +136,7 @@ class Runner(object):
             if (epoch + 1) % self.cfg.eval_ep == 0 or epoch == self.cfg.epochs - 1:
                 self.validate(epoch)
 
-    def validate(self, epoch=None, is_small=False, valid_samples=40):
+    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False):
         self.cfg.is_eval_conditional = False
         if is_small:
             self.val_loader = build_dataloader(self.cfg.dataset.test, self.cfg, is_train=True)
@@ -173,23 +181,26 @@ class Runner(object):
                     cls_idx = lane_maps['cls_idx'][batch_idx]
                     conf_cls_idx = lane_maps['conf_cls_idx'][batch_idx]
 
-                    _, _, _, f1 = calc_measures(conf_label, conf_pred, 'conf')
-                    _, _, _, f1_strict = calc_measures(conf_label, conf_pred, 'conf', is_wo_offset=True)
+                    print( "Shape of Confidence Label is : " + str( conf_label.shape ))
+                    print( "Shape of Confidence prediction is : " + str( conf_pred.shape ))
+
+                    _, _, _, f1 = calc_measures(conf_label, conf_pred, 'conf' , image_size= self.cfg.image_size)
+                    _, _, _, f1_strict = calc_measures(conf_label, conf_pred, 'conf', is_wo_offset=True , image_size= self.cfg.image_size)
                     list_conf_f1.append(f1)
                     list_conf_f1_strict.append(f1_strict)
 
-                    _, _, _, f1 = calc_measures(conf_label, conf_by_cls, 'conf')
-                    _, _, _, f1_strict = calc_measures(conf_label, conf_by_cls, 'conf', is_wo_offset=True)
+                    _, _, _, f1 = calc_measures(conf_label, conf_by_cls, 'conf' , image_size= self.cfg.image_size)
+                    _, _, _, f1_strict = calc_measures(conf_label, conf_by_cls, 'conf', is_wo_offset=True , image_size= self.cfg.image_size)
                     list_conf_by_cls_f1.append(f1)
                     list_conf_by_cls_f1_strict.append(f1_strict)
 
-                    _, _, _, f1 = calc_measures(cls_label, cls_idx, 'cls')
-                    _, _, _, f1_strict = calc_measures(cls_label, cls_idx, 'cls', is_wo_offset=True)
+                    _, _, _, f1 = calc_measures(cls_label, cls_idx, 'cls' , image_size= self.cfg.image_size)
+                    _, _, _, f1_strict = calc_measures(cls_label, cls_idx, 'cls', is_wo_offset=True , image_size= self.cfg.image_size)
                     list_cls_f1.append(f1)
                     list_cls_f1_strict.append(f1_strict)
 
-                    _, _, _, f1 = calc_measures(cls_label, conf_cls_idx, 'cls')
-                    _, _, _, f1_strict = calc_measures(cls_label, conf_cls_idx, 'cls', is_wo_offset=True)
+                    _, _, _, f1 = calc_measures(cls_label, conf_cls_idx, 'cls' , image_size= self.cfg.image_size)
+                    _, _, _, f1_strict = calc_measures(cls_label, conf_cls_idx, 'cls', is_wo_offset=True , image_size= self.cfg.image_size)
                     list_cls_w_conf_f1.append(f1)
                     list_cls_w_conf_f1_strict.append(f1_strict)
 
@@ -210,7 +221,8 @@ class Runner(object):
         cls_w_conf_f1 = np.mean(list_cls_w_conf_f1)
         cls_w_conf_f1_strict = np.mean(list_cls_w_conf_f1_strict)
 
-        log_val = f'epoch = {epoch}, {conf_f1}, {conf_f1_strict}, {conf_by_cls_f1}, {conf_by_cls_f1_strict}, {cls_f1}, {cls_f1_strict}, {cls_w_conf_f1}, {cls_w_conf_f1_strict}'
+        log_val = f'epoch = {epoch}, F1 Score confidence : {conf_f1}, F1 Score Strict Confidence : {conf_f1_strict}, F1 Score Confidence per Class : {conf_by_cls_f1}, F1 Score Confidence Strict per Class : {conf_by_cls_f1_strict}, F1 Classification : {cls_f1}, F1 Classification Strict : {cls_f1_strict}, F1 Classification with Confidence : {cls_w_conf_f1}, F1 Classification with Confidence Strict : {cls_w_conf_f1_strict}'
+        print( "Validation result : " + str( log_val ) + "/n========================================")
         self.write_to_log(log_val + '\n', os.path.join(self.log_dir, 'val.txt'))
         self.val_info_bar.set_description_str(log_val)
         ### Logging ###
@@ -303,11 +315,11 @@ class Runner(object):
                 new_output.update({'features': output['features']})
 
             if is_calc_f1:
-                acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf')
-                acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf')
+                acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf', image_size= self.cfg.image_size)
+                acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf' , image_size= self.cfg.image_size)
 
-                acc_2, pre_2, rec_2, f1_2 = calc_measures(cls_label, cls_idx, 'cls')
-                acc_3, pre_3, rec_3, f1_3 = calc_measures(cls_label, conf_cls_idx, 'cls')
+                acc_2, pre_2, rec_2, f1_2 = calc_measures(cls_label, cls_idx, 'cls', image_size= self.cfg.image_size)
+                acc_3, pre_3, rec_3, f1_3 = calc_measures(cls_label, conf_cls_idx, 'cls' , image_size= self.cfg.image_size)
 
                 new_output['accuracy'] = np.array([acc_0, acc_1, acc_2, acc_3])
                 new_output['precision'] = np.array([pre_0, pre_1, pre_2, pre_3])
@@ -359,11 +371,11 @@ class Runner(object):
             conf_pred = lane_maps['conf_pred_1'][0]
             conf_by_cls = lane_maps['conf_by_cls_1'][0]
 
-            acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf')
-            acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf')
+            acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf' , image_size= self.cfg.image_size)
+            acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf' , image_size= self.cfg.image_size)
 
-            acc_2, pre_2, rec_2, f1_2 = calc_measures(cls_label, cls_idx, 'cls')
-            acc_3, pre_3, rec_3, f1_3 = calc_measures(cls_label, conf_cls_idx, 'cls')
+            acc_2, pre_2, rec_2, f1_2 = calc_measures(cls_label, cls_idx, 'cls' , image_size= self.cfg.image_size)
+            acc_3, pre_3, rec_3, f1_3 = calc_measures(cls_label, conf_cls_idx, 'cls' , image_size= self.cfg.image_size)
 
             new_output['accuracy'] = np.array([acc_0, acc_1, acc_2, acc_3])
             new_output['precision'] = np.array([pre_0, pre_1, pre_2, pre_3])
@@ -389,8 +401,8 @@ class Runner(object):
 
             new_output['conf_cls_idx_1'] = lane_maps['conf_cls_idx_1'][0]
 
-            acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf')
-            acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf')
+            acc_0, pre_0, rec_0, f1_0 = calc_measures(conf_label, conf_pred, 'conf' , image_size= self.cfg.image_size)
+            acc_1, pre_1, rec_1, f1_1 = calc_measures(conf_label, conf_by_cls, 'conf' , image_size= self.cfg.image_size)
 
         return new_output
 
@@ -427,8 +439,8 @@ class Runner(object):
 
                         print('\n### Confidence ###')
                         for temp_conf, temp_desc in zip(list_conf, desc_list_conf):
-                            acc, pre, rec, f1 = calc_measures(conf_label, temp_conf, 'conf')
-                            acc_s, pre_s, rec_s, f1_s = calc_measures(conf_label, temp_conf, 'conf', is_wo_offset=True)
+                            acc, pre, rec, f1 = calc_measures(conf_label, temp_conf, 'conf' , image_size= self.cfg.image_size)
+                            acc_s, pre_s, rec_s, f1_s = calc_measures(conf_label, temp_conf, 'conf', is_wo_offset=True , image_size= self.cfg.image_size)
                             print(f'{temp_desc}acc={acc},acc_strict={acc_s}')
                             print(f'{temp_desc}pre={pre},pre_strict={pre_s}')
                             print(f'{temp_desc}rec={rec},rec_strict={rec_s}')
@@ -436,8 +448,8 @@ class Runner(object):
 
                         print('### Classification ###')
                         for temp_cls, temp_desc in zip(list_cls, desc_list_cls):
-                            acc, pre, rec, f1 = calc_measures(cls_label, temp_cls, 'cls')
-                            acc_s, pre_s, rec_s, f1_s = calc_measures(cls_label, temp_cls, 'cls', is_wo_offset=True)
+                            acc, pre, rec, f1 = calc_measures(cls_label, temp_cls, 'cls' , image_size= self.cfg.image_size)
+                            acc_s, pre_s, rec_s, f1_s = calc_measures(cls_label, temp_cls, 'cls', is_wo_offset=True , image_size= self.cfg.image_size)
                             print(f'{temp_desc}acc={acc},acc_strict={acc_s}')
                             print(f'{temp_desc}pre={pre},pre_strict={pre_s}')
                             print(f'{temp_desc}rec={rec},rec_strict={rec_s}')
@@ -493,7 +505,7 @@ class Runner(object):
                     conf_pred = lane_maps['conf_pred'][batch_idx]
                     cls_idx = lane_maps['cls_idx'][batch_idx]
 
-                    _, _, _, f1 = calc_measures(conf_label, conf_pred, 'conf')
+                    _, _, _, f1 = calc_measures(conf_label, conf_pred, 'conf' , image_size= self.cfg.image_size)
                     list_conf_f1.append([f1, condition])
                     cumsum += f1
                     cnt+=1
@@ -539,7 +551,7 @@ class Runner(object):
             if(len(cond_dic_conf[condition]) > 0):
                 res_dic_conf_f1[condition] = np.round(np.mean(cond_dic_conf[condition])*100, 3)
                 res_dic_cls_f1[condition] = np.round(np.mean(cond_dic_cls[condition])*100, 3)
-            else:
+            else:       
                 res_dic_conf_f1[condition] = -999
                 res_dic_cls_f1[condition] = -999
 

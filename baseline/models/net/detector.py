@@ -31,11 +31,15 @@ class Detector(nn.Module):
 
         if self.training:
             out = self.heads(fea)
-            output.update(self.heads.loss(out, batch, self.loss_type))
+            try : 
+                output.update(self.heads.loss(out, batch, self.loss_type))
+            except :
+                output.update(self.heads.loss(out, batch))
         else:
             out = self.heads(fea)
             if self.head_type == 'seg':
-                output.update({'conf': out[:,7,:,:], 'cls': out[:,:7,:,:]})
+                #output.update({'conf': out[:,7,:,:], 'cls': out[:,:7,:,:]})
+                output.update({'conf': out[:, self.heads.num_classes ,:,:], 'cls': out[:,: self.heads.num_classes,:,:]})
                 output.update({
                     'lane_maps': self.heads.get_lane_map_numpy_with_label(
                                         output, batch, is_img=self.cfg.view)})

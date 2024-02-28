@@ -97,17 +97,21 @@ class RowSharNotReducRef(nn.Module):
                 tr_dropout = 0.,
                 tr_emb_dropout = 0.,
                 is_reuse_same_network = False,
-                cfg=None):
+                cfg=None,
+                number_class_target = 1):
         super(RowSharNotReducRef, self).__init__()
         self.cfg=cfg
 
+        self.row_size = row_size
+
         ### Making Labels ###
-        self.num_cls = 6
+        self.num_cls = number_class_target
         self.lambda_cls=lambda_cls
         ### Making Labels ###
 
         ### MLP Encoder (1st Stage) ###
-        self.row_tensor_maker = Rearrange('b c h w -> b (c w) h')
+        #self.row_tensor_maker = Rearrange('b c h w -> b (c w) h')
+        self.row_tensor_maker = Rearrange('b c h w -> b (c h) w')
 
         for idx_cls in range(self.num_cls):
             setattr(self, f'ext_{idx_cls}', nn.Sequential(
@@ -128,7 +132,10 @@ class RowSharNotReducRef(nn.Module):
         ### Refinement (2nd Stage) ###
         self.thr_ext = thr_ext
         self.off_grid = off_grid
+        #self.off_grid = self.off_grid + 1
         in_token_channel = (2*self.off_grid+1)*row_size*dim_feat
+        #in_token_channel = (2*self.off_grid+1)*240*dim_feat
+        #in_token_channel = (2*(self.off_grid + 1))*row_size*dim_feat
         self.to_token = nn.Sequential(
             Rearrange('c h w -> (c h w)'),
             nn.Linear(in_token_channel, dim_token)
@@ -180,6 +187,7 @@ class RowSharNotReducRef(nn.Module):
         # b, 144, 144 conf
         # b, 7, 144, 144 cls
         b_size, dim_feat, img_h, img_w = row_feat.shape # 2, 16, 144, 144
+        #print( "Shape of the input point cloud is : " + str( row_feat.shape ))
         num_cls = self.num_cls
 
         # Zero padding for offset
@@ -187,7 +195,7 @@ class RowSharNotReducRef(nn.Module):
         zero_left = torch.zeros((b_size,dim_feat,img_h,off_grid)).cuda()
         zero_right = torch.zeros((b_size,dim_feat,img_h,off_grid)).cuda()
         row_feat_pad = torch.cat([zero_left, row_feat, zero_right], dim=3) # 2, 16, 144, 148 (144+2*off_grid)
-        # print(row_feat_pad.shape)
+        print(row_feat_pad.shape)
 
         for idx_b in range(b_size):
             ext_lane_idx_per_b = []
@@ -203,9 +211,11 @@ class RowSharNotReducRef(nn.Module):
                     ext_corr_idxs.append(corr_idxs)
                     
                     temp_token = torch.zeros((dim_feat,img_h,1+2*off_grid)).cuda()
+                    print( "Token for Row Wise refinement shape : " + str( temp_token.shape ))
                     for idx_h in range(img_h):
+                    #for idx_h in range(img_w):
                         corr_idx = corr_idxs[idx_h]+off_grid # do not forget off_grid
-                        # print(row_feat_pad[idx_b,:,idx_h,corr_idx-off_grid:corr_idx+off_grid].shape)
+                        #print(row_feat_pad[idx_b,:,idx_h,corr_idx-off_grid:corr_idx+off_grid+1].shape)
                         temp_token[:,idx_h,:] = row_feat_pad[idx_b,:,idx_h,corr_idx-off_grid:corr_idx+off_grid+1]
                     # linear transform & pos
                     # print(temp_token.shape)
@@ -216,6 +226,7 @@ class RowSharNotReducRef(nn.Module):
             # print(len(ext_lane_tokens))
             if len(ext_lane_tokens) > 0:
                 tokens = self.tr_lane_correlator(torch.cat(ext_lane_tokens, dim=1))
+                print( "Shape of Transformer Token : " + str( tokens.shape ))
                 # print(tokens.shape)
                 
                 # return to original row_feat_pad
@@ -223,6 +234,7 @@ class RowSharNotReducRef(nn.Module):
                     for idx_h in range(idx_h):
                         corr_idx = corr_idxs[idx_h]+off_grid
                         row_feat_pad[idx_b,:,idx_h,corr_idx-off_grid:corr_idx+off_grid+1] = tokens[0,idx,:,idx_h,:]
+                        #row_feat_pad[idx_b,:,idx_h,corr_idx-(off_grid+1):corr_idx+(off_grid)+1] = tokens[0,idx,:,idx_h,:]
         row_feat = row_feat_pad[:,:,:,off_grid:img_w+off_grid]
         # print(row_feat.shape)
         row_tensor = self.row_tensor_maker(row_feat)
@@ -240,40 +252,74 @@ class RowSharNotReducRef(nn.Module):
 
         return out_dict
 
-    def label_formatting(self, raw_label, is_get_label_as_tensor = False):
+    def label_formatting(self, raw_label, is_get_label_as_tensor = False , new_image_size = None):
         # Output image: top-left of the image is farthest-left
         num_of_labels = len(raw_label)
-        label_tensor = np.zeros((num_of_labels, 2, 144, 144), dtype = np.longlong)
+        if new_image_size :
+            label_tensor = np.zeros((num_of_labels, 2, new_image_size[0], new_image_size[1] ), dtype = np.longlong)
+        else : 
+            label_tensor = np.zeros((num_of_labels, 2, self.row_size, self.row_size), dtype = np.longlong)
 
         for k in range(num_of_labels):
-            label_temp = np.zeros((144,144,2), dtype = np.longlong)
-            label_data = raw_label[k]
 
-            for i in range(144):
-                for j in range(144):
+            if new_image_size :
 
-                    y_idx = 144 - i - 1
-                    x_idx = 144 - j - 1
+                #print( "Upsampling image BEV detection to : " + str( new_image_size ))
 
-                    line_num = int(label_data[i][j])
-                    if line_num == 255:
-                        label_temp[y_idx][x_idx][1] = 0
-                        # classification
-                        label_temp[y_idx][x_idx][0] = 6
-                    else: # class
-                        # confidence
-                        label_temp[y_idx][x_idx][1] = 1
-                        # classification
-                        label_temp[y_idx][x_idx][0] = line_num
+                row_size = new_image_size[0]
+                column_size = new_image_size[1]
+                label_temp = np.zeros((row_size,column_size,2), dtype = np.longlong)
+                label_data = raw_label[k]
 
-            label_tensor[k,:,:,:] = np.transpose(label_temp, (2, 0, 1))
+                #print( "Label data is : {} with total drivable area : {}".format( str( label_data ) , torch.sum( label_data ) ))
+
+                for i in range( row_size ):
+                    for j in range( column_size ):
+
+                        y_idx = row_size - i - 1
+                        x_idx = column_size - j - 1
+
+                        line_num = int(label_data[i][j])
+                        if line_num == 255:
+                            label_temp[y_idx][x_idx][1] = 0
+                            # classification
+                            label_temp[y_idx][x_idx][0] = 1 #6 
+                        else: # class
+                            # confidence
+                            label_temp[y_idx][x_idx][1] = 1
+                            # classification
+                            label_temp[y_idx][x_idx][0] = line_num
+
+                label_tensor[k,:,:,:] = np.transpose(label_temp, (2, 0, 1))
+            else :
+
+                label_temp = np.zeros((self.row_size,self.row_size,2), dtype = np.longlong)
+                label_data = raw_label[k]
+
+                for i in range(self.row_size):
+                    for j in range(self.row_size):
+
+                        y_idx = self.row_size - i - 1
+                        x_idx = self.row_size - j - 1
+
+                        line_num = int(label_data[i][j])
+                        if line_num == 255:
+                            label_temp[y_idx][x_idx][1] = 0
+                            # classification
+                            label_temp[y_idx][x_idx][0] = 6
+                        else: # class
+                            # confidence
+                            label_temp[y_idx][x_idx][1] = 1
+                            # classification
+                            label_temp[y_idx][x_idx][0] = line_num
+                
 
         if is_get_label_as_tensor:
             return torch.tensor(label_tensor)
         else:
             return label_tensor
 
-    def get_lane_exist_and_cls_wise_maps(self, label_tensor, is_one_hot=False, is_ret_list=True):
+    def get_lane_exist_and_cls_wise_maps(self, label_tensor, is_one_hot=False, is_ret_list=True , is_using_upsampling = False , new_image_size = None):
         b, _, img_h, img_w = label_tensor.shape # _, 2, 144, 144
         n_cls = self.num_cls
 
@@ -299,13 +345,23 @@ class RowSharNotReducRef(nn.Module):
         # cv2.waitKey(0)
         ### Vis each batch ###
 
-        lb_cls = np.squeeze(label_tensor[:,0,:,:]) # 0~5: cls, 6: background
+        lb_cls = np.squeeze(label_tensor[:,0,:,:]).reshape( b , img_h , img_w ) # 0~5: cls, 6: background
+        
+
+        print( "Label class shape : " + str( lb_cls.shape ))
         
         ret_exist = np.zeros((b,n_cls,img_h)) # 2,6,144
         ret_maps = np.zeros((b,n_cls,img_h,img_w))
         for idx_b in range(b):
-            ret_exist[idx_b,:,:], ret_maps[idx_b,:,:,:] = \
-                self.get_line_existence_and_cls_wise_maps_per_batch(np.squeeze(lb_cls[idx_b,:,:]))
+
+            if is_using_upsampling == True :
+
+                ret_exist[idx_b,:,:], ret_maps[idx_b,:,:,:] = \
+                    self.get_line_existence_and_cls_wise_maps_per_batch((np.squeeze(lb_cls[idx_b,:])), img_h = new_image_size[0], img_w= new_image_size[1])
+            else : 
+                ret_exist[idx_b,:,:], ret_maps[idx_b,:,:,:] = \
+                    self.get_line_existence_and_cls_wise_maps_per_batch((np.squeeze(lb_cls[idx_b,:])), img_h= self.row_size , img_w= self.row_size ) #self.get_line_existence_and_cls_wise_maps_per_batch((np.squeeze(lb_cls[idx_b,:,:])), img_h= self.row_size , img_w= self.row_size )
+                
         
         if is_one_hot:
             ret_ext_oh = np.zeros((b,n_cls,img_h,2))
@@ -325,15 +381,20 @@ class RowSharNotReducRef(nn.Module):
         else:
             return ret_exist, ret_maps
 
-    def get_line_existence_and_cls_wise_maps_per_batch(self, lb_cls, n_cls=6, img_h=144, img_w=144):
-        # print(lb_cls.shape)
+    def get_line_existence_and_cls_wise_maps_per_batch(self, lb_cls, n_cls= None, img_h=144, img_w=144):
+        #print(lb_cls.shape)
+        print( "Shape of Line existence map is : " + str( lb_cls.shape ))
+        if not n_cls :
+            n_cls = self.num_cls
+
         cls_maps = np.zeros((n_cls,img_h,img_w))
         line_ext = np.zeros((n_cls,img_h))
         for idx_cls in range(n_cls):
             cls_maps[idx_cls,:,:][np.where(lb_cls==idx_cls)] = 1.
             lb_conf = np.zeros_like(lb_cls)
             lb_conf[np.where(lb_cls==idx_cls)]=1.
-            line_ext[idx_cls,:] = np.sum(lb_conf, axis=1)
+            #line_ext[idx_cls,:] = np.sum(lb_conf, axis=1)
+            line_ext[idx_cls,:] = np.sum(lb_conf, axis=1)            
             # print(line_ext[idx_cls,:])
             # print(line_ext[idx_cls,:].shape)
 
@@ -405,25 +466,75 @@ class RowSharNotReducRef(nn.Module):
         return dict_ret
 
     def loss(self, out, batch, loss_type=None):
-        train_label = batch['label']
-        lanes_label = train_label[:,:, :144]
-        lanes_label = self.label_formatting(lanes_label, is_get_label_as_tensor=False) # channel0 = line number, channel1 = confidence
+        train_label = batch['label']#.type( torch.FloatTensor)
 
-        ls_lb_ext, ls_lb_cls = self.get_lane_exist_and_cls_wise_maps(lanes_label, is_one_hot=True, is_ret_list=True)
+        # Change drivable area label to K- Lane line format
+
+        if torch.max( train_label ) != 255 :
+
+            #print( "Changing drivable area label to K-Lane drivable area label format")
+
+            train_label[ train_label == 0 ] = 255
+            train_label[ train_label == 1 ] = 0
+
+        #print( "Dimension of Label is : " + str( train_label.shape))
+        #print( "Raw label is : " + str( train_label ))
+        #print( "Total drivable area : " + str( torch.sum( train_label )))
+        #lanes_label = train_label[:,:, :144]
+        lanes_label = train_label[:,:, :]
+        #lanes_label = train_label[:,:, :self.row_size]
+        #print( "The dimension of raw label of label training is : " + str( lanes_label.shape ))
+        lanes_label = self.label_formatting(lanes_label, is_get_label_as_tensor=False , new_image_size = train_label.shape[1 : 3]) # channel0 = line number, channel1 = confidence
+        #print( "Label of the training is : " + str( lanes_label ))
+
+        #lanes_label = lanes_label.reshape( -1, 2, self.row_size , self.row_size , 1)
+
+        #print( "Shape of lanes label : " + str( lanes_label.shape ) )
+
+        if ( ( self.row_size != train_label.shape[1] ) | ( self.row_size != train_label.shape[2] ) ) :
+            ls_lb_ext, ls_lb_cls = self.get_lane_exist_and_cls_wise_maps(lanes_label, is_one_hot=True, is_ret_list=True , is_using_upsampling = True , new_image_size = train_label.shape[ 1 : 3])
+        else :
+            ls_lb_ext, ls_lb_cls = self.get_lane_exist_and_cls_wise_maps(lanes_label, is_one_hot=True, is_ret_list=True , is_using_upsampling = True )
+
+        print( "Maps of drivable area is : {} with sum of drivable area : {}".format( str( ls_lb_cls[0]) , torch.sum( ls_lb_cls[0])))
         EPS = 1e-12
 
         ### 1st Stage ###
         ext_loss = 0.
         cls_loss = 0.
         len_total_ext_row = 0.
+        #print( "Number of Class is : " + str( self.num_cls ))
         for idx_cls in range(self.num_cls):
-            ext_loss += -torch.sum(ls_lb_ext[idx_cls]*torch.log(out[f'ext_{idx_cls}']+EPS))
-            idx_ext = torch.where(ls_lb_ext[idx_cls][:,:,0]==1.)
+            #print( "Dimension of Extended Output of Deep Learning : {} and Dimension of Class of Deep Learning : {}".format( out[f'ext_{idx_cls}'].shape ,  out[f'cls_{idx_cls}'].shape))
+            if train_label.shape[2] !=  out[f'ext_{idx_cls}'].shape[1] :
+                upsampling_factor_row = int( train_label.shape[1] / out[ f'ext_{idx_cls}' ].shape[1] )
+                #upsampling_factor_column = float( train_label.shape[2]/ out[ f'ext_{idx_cls}' ].shape[2] )
+
+                out[f'ext_{idx_cls}'] = nn.Upsample( scale_factor= upsampling_factor_row , mode="nearest"  )(  torch.permute( out[f'ext_{idx_cls}'] , ( 0, 2, 1)) )
+                out[f'ext_{idx_cls}'] = torch.permute( out[f'ext_{idx_cls}'] , ( 0 , 2, 1 ))
+                out[f'cls_{idx_cls}'] = nn.Upsample(  size = train_label.shape[1 : 3 ], mode="nearest" )( out[f'cls_{idx_cls}'].reshape( -1, self.num_cls , self.row_size , self.row_size )  )
+                out[f'cls_{idx_cls}'] = torch.squeeze( out[f'cls_{idx_cls}'] , axis= 0)
+
+                #print( "Dimension of Extended Output of Deep Learning after upsampling: {} and Dimension of Class of Deep Learning : {}".format( out[f'ext_{idx_cls}'].shape ,  out[f'cls_{idx_cls}'].shape))
+
+            print( "Label of Road Detection is : {} with shape : {} with Number of Drivable Area : {}".format( ls_lb_ext[ idx_cls ] , ls_lb_ext[ idx_cls ].shape ,  torch.sum( ls_lb_ext[ idx_cls ])))
+            print( "Prediction of Road Detection is : {} with prediction shape : {} with Mean of Drivable Area : {}".format( out[f'ext_{idx_cls}'] , out[f'ext_{idx_cls}'].shape , torch.mean( out[f'ext_{idx_cls}'] )))
+            ext_loss += -torch.sum(ls_lb_ext[idx_cls]*torch.log(np.squeeze( out[f'ext_{idx_cls}'] )+EPS))
+            #idx_ext = torch.where(ls_lb_ext[idx_cls][:,:,0]==1.)
+            #print( "Prediction of Road Detection is : " + str( ls_lb_ext[idx_cls]))
+            idx_ext = torch.where(ls_lb_ext[idx_cls][:,:]==1.)
+            print( "Index of selected row : " + str( idx_ext ))
             len_ext_row = len(idx_ext[1])
             len_total_ext_row += len_ext_row
+            print( "Shape of Selected Row : " + str( torch.log(out[f'cls_{idx_cls}'][idx_ext]+EPS).shape ))
+            #try : 
             cls_loss += -torch.sum(ls_lb_cls[idx_cls][idx_ext]*torch.log(out[f'cls_{idx_cls}'][idx_ext]+EPS))
+            #except :
+            #    cls_loss += 0
         
-        ext_loss = ext_loss/(6.*144.)
+        #ext_loss = ext_loss/(6.*144.)
+        #ext_loss = ext_loss/(6.*self.row_size)
+        ext_loss = ext_loss/(self.num_cls*self.row_size)
         cls_loss = self.lambda_cls*cls_loss/len_total_ext_row
         ### 1st Stage ###
 
@@ -432,13 +543,30 @@ class RowSharNotReducRef(nn.Module):
         cls_loss2 = 0.
         len_total_ext_row2 = 0.
         for idx_cls in range(self.num_cls):
+
+            if train_label.shape[2] !=  out[f'ext2_{idx_cls}'].shape[1] :
+                upsampling_factor_row = int( train_label.shape[1] / out[ f'ext2_{idx_cls}' ].shape[1] )
+                #upsampling_factor_column = float( train_label.shape[2]/ out[ f'ext_{idx_cls}' ].shape[2] )
+
+                out[f'ext2_{idx_cls}'] = nn.Upsample( scale_factor= upsampling_factor_row , mode="nearest"  )(  torch.permute( out[f'ext2_{idx_cls}'] , ( 0, 2, 1)) )
+                out[f'ext2_{idx_cls}'] = torch.permute( out[f'ext2_{idx_cls}'] , ( 0 , 2, 1 ))
+                out[f'cls2_{idx_cls}'] = nn.Upsample(  size = train_label.shape[1 : 3 ], mode="nearest" )( out[f'cls2_{idx_cls}'].reshape( -1, self.num_cls , self.row_size , self.row_size )  )
+                out[f'cls2_{idx_cls}'] = torch.squeeze( out[f'cls2_{idx_cls}'] , axis= 0)
+            
+            #print( "Output of road detection is : " + str( out[f'ext2_{idx_cls}'] ))
+            #print( "Label of Road Detection is : {} with shape : {} with Number of Drivable Area : {}".format( ls_lb_ext[ idx_cls ] , ls_lb_ext[ idx_cls ].shape ,  torch.sum( ls_lb_ext[ idx_cls ])))
+            print( "Prediction of Road Detection is : {} with prediction shape : {} with Mean of Drivable Area : {}".format( out[f'ext2_{idx_cls}'] , out[f'ext2_{idx_cls}'].shape , torch.mean( out[f'ext2_{idx_cls}'] )))
             ext_loss2 += -torch.sum(ls_lb_ext[idx_cls]*torch.log(out[f'ext2_{idx_cls}']+EPS))
-            idx_ext2 = torch.where(ls_lb_ext[idx_cls][:,:,0]==1.)
+            #print( "Existence Road Detection loss is : " + str( ext_loss2 ))
+            #idx_ext2 = torch.where(ls_lb_ext[idx_cls][:,:,0]==1.)
+            idx_ext2 = torch.where(ls_lb_ext[idx_cls][:,:]==1.)
             len_ext_row2 = len(idx_ext2[1])
             len_total_ext_row2 += len_ext_row2
             cls_loss2 += -torch.sum(ls_lb_cls[idx_cls][idx_ext2]*torch.log(out[f'cls2_{idx_cls}'][idx_ext2]+EPS))
         
-        ext_loss2 = ext_loss2/(6.*144.)
+        #ext_loss2 = ext_loss2/(6.*144.)
+        #ext_loss2 = ext_loss2/(6.*self.row_size)
+        ext_loss2 = ext_loss2/( self.num_cls*self.row_size)
         cls_loss2 = self.lambda_cls*cls_loss2/len_total_ext_row2
         ### 2nd Stage ###
 
@@ -484,6 +612,7 @@ class RowSharNotReducRef(nn.Module):
 
         batch_size = len(output['conf'])
         for batch_idx in range(batch_size):
+            #print( "Raw Label of drivable area is : {} with Total Drivable Area : {}".format( str( data[ "label" ][ batch_idx ]) , torch.sum( data[ "label"][batch_idx])))
             cls_label = data['label'][batch_idx].cpu().numpy()
             conf_label = np.where(cls_label == 255, 0, 1)
 

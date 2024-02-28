@@ -12,6 +12,8 @@ from einops.layers.torch import Rearrange
 
 from baseline.models.registry import BACKBONE
 
+import math
+
 # helpers
 def pair(t):
     return t if isinstance(t, tuple) else (t, t)
@@ -144,16 +146,43 @@ class VitSegNet(nn.Module):
                 dropout=0.,
                 emb_dropout=0.,
                 is_with_shared_mlp=True,
-                cfg=None):  # mlp_dim is corresponding to expansion factor
+                cfg=None,
+                is_using_convolution_pooling = False):  # mlp_dim is corresponding to expansion factor
         super().__init__()
-        image_height, image_width = pair(image_size)
-        patch_height, patch_width = pair(patch_size)
+
+        self.image_size = image_size
+        self.patch_size = patch_size
+
+        if isinstance( image_size , list ) :
+            image_height = image_size[0]
+            image_width = image_size[1]
+            
+        else :
+            image_height, image_width = pair(image_size)
+
+            self.image_height = image_height
+            self.image_width = image_width
+
+        if isinstance( patch_size , list ) :
+            patch_height = patch_size[0]
+            patch_width = patch_size[1]
+        else :
+            patch_height, patch_width = pair(patch_size)
+
+        #print( "Image size is : height : {} width : {}".format( image_height , image_width))
+        #print( "Patch size is : height : {} width : {}".format( patch_height , patch_width))
 
         assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
 
         num_patches = (image_height // patch_height) * (image_width // patch_width)
+        #print( "Number of Patch in Vision Transformer : " + str( num_patches ))
         patch_dim = channels * patch_height * patch_width
+        patch_area = patch_height * patch_width
         # assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
+
+        #if patch_area > dim :
+
+        #    dim = 2*patch_area
 
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = patch_height, p2 = patch_width),
@@ -172,19 +201,45 @@ class VitSegNet(nn.Module):
 
         self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
 
-        temp_h = int(image_size/patch_size)
-        self.rearrange = Rearrange('b (h w) (p1 p2 c) -> b c (h p1) (w p2)', h = temp_h, p1 = patch_size, p2 = patch_size)
+        if isinstance( image_size , list ) :
+            temp_h = int( image_size[0]/patch_size )
+            temp_w = int( image_size[1]/patch_size)
+        else :
+            temp_h = int(image_size/patch_size)
+            temp_w = int( image_size/patch_size)
+        self.rearrange = Rearrange('b (h w) (p1 p2 c) -> b c (h p1) (w p2)', h = temp_h, w = temp_w, p1 = patch_size, p2 = patch_size)
         
         out_in_channels = int(dim/(patch_size**2))
         if is_with_shared_mlp:
             self.is_with_shared_mlp = True
-            self.shared_mlp = nn.Conv2d(in_channels=out_in_channels, out_channels=output_channels, kernel_size=1)
+            self.shared_mlp = nn.Conv2d(in_channels=out_in_channels, out_channels=output_channels, kernel_size=1).cuda()
         else:
             self.is_with_shared_mlp = False
 
+        self.is_using_convolution_pooling = is_using_convolution_pooling
+
+        self.convolution_pooling = None
+
     def forward(self, img):
+        #print( "Input shape is : " + str( img.shape ))
+        if self.is_using_convolution_pooling == True :
+
+            if not self.convolution_pooling :
+
+                self.number_of_strides_height = int( img.shape[2]/ self.image_height)
+                self.number_of_strides_width = int( img.shape[3]/ self.image_width )
+
+                #print( "Stride of Convolutional Pooling is : " + str( self.number_of_strides ))
+
+                self.convolution_pooling = nn.Conv2d( img.shape[1], img.shape[1], kernel_size=[self.number_of_strides_height , self.number_of_strides_width] , stride=[self.number_of_strides_height , self.number_of_strides_width]).cuda()
+
+            img = self.convolution_pooling( img )
+
         x = self.to_patch_embedding(img)
         _, n, _ = x.shape
+
+        #print( "Shape of patch embedding with number of patch: " + str( x.shape[1] ))
+        #print( "Shape of positional embedding for Transformer : " + str( self.pos_embedding[:, :n].shape ))
 
         # Without cls token
         # cls_tokens = repeat(self.cls_token, '() n d -> b n d', b = b)
@@ -194,17 +249,21 @@ class VitSegNet(nn.Module):
         # print(f'1: {x.shape}')
         
         x += self.pos_embedding[:, :n]
+        #print( "Shape of input before transformer : " + str( x.shape ))
         x = self.dropout(x)
         x = self.transformer(x)
         # print(f'2: {x.shape}')
 
+        #print( "Shape of output of transformer : " + str( x.shape ))
+
         x = self.rearrange(x)
         # print(f'3: {x.shape}')
 
+        #print( "Shape of input before MLP is : " + str( x.shape ))
         if self.is_with_shared_mlp:
             x = self.shared_mlp(x)
         # print(f'4: {x.shape}')
-
+        #print( "Shape of the output is : " + str( x.shape ))
         return x
 
 if __name__ == '__main__':

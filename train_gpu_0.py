@@ -18,7 +18,7 @@ from baseline.utils.config import Config
 from baseline.engine.runner import Runner
 
 def main():
-    path_config = './configs/Proj28_GFC-T3_RowRef_82_73.py'
+    path_config = '/home/ofel04/K-Lane/configs/Proj28_GFC-T3_RowRef_82_73_for_Argoverse_Dataset.py'
     path_split = path_config.split('/')
     cfg = Config.fromfile(path_config)
     cfg.log_dir = cfg.log_dir + '/' + time_log

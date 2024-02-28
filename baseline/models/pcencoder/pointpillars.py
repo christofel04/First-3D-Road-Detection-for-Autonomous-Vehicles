@@ -17,7 +17,10 @@ class PointPillars(nn.Module):
         self.cfg=cfg
         
         self.pillar_encoder = nn.Sequential(
-            nn.Conv2d(num_features, num_channels, kernel_size=1, bias=False),
+            nn.Conv2d(num_features, 2*num_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(2*num_channels),
+            nn.ReLU(),
+            nn.Conv2d(2*num_channels, num_channels, kernel_size=1, bias=False), # Additional Convolution 2D to extract points pillar features
             nn.BatchNorm2d(num_channels),
             nn.ReLU(),
             nn.MaxPool2d((1, max_points_per_pillar))
@@ -32,7 +35,7 @@ class PointPillars(nn.Module):
         
         pillars = pillars.permute(0, 3, 1, 2) # batch, features (channels), max pillars, max points
         
-        out = self.pillar_encoder(pillars)
+        out = self.pillar_encoder(pillars.type( torch.cuda.FloatTensor ))
         
         # Send to CPU for scattering with numpy
         pillar_indices = pillar_indices.cpu()
