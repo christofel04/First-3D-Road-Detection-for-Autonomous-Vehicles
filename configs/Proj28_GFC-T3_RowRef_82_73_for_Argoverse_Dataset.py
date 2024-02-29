@@ -9,6 +9,8 @@ finetune_from = None
 log_dir = './logs'
 view = False
 
+name_of_experiment= = "Training_Road_Detection_Argoverse_Dataset",
+
 net = dict(
     type='Detector',
     head_type= "seg" , #'row',
@@ -138,4 +140,7 @@ dataset = dict(
         max_number_of_log = 2
     )
 )
-workers=12 #12
+workers=12, #12
+
+# For evaluating Road Detection
+is_visualized_result = True

@@ -21,6 +21,11 @@ from baseline.datasets import build_dataloader, build_dataset
 from baseline.utils.metric_utils import calc_measures
 from baseline.utils.net_utils import save_model, load_network
 
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from PIL import Image 
+
 class Runner(object):
     def __init__(self, cfg):
         torch.manual_seed(cfg.seed)
@@ -134,9 +139,9 @@ class Runner(object):
             if (epoch + 1) % self.cfg.save_ep == 0 or epoch == self.cfg.epochs - 1:
                 self.save_ckpt(epoch)
             if (epoch + 1) % self.cfg.eval_ep == 0 or epoch == self.cfg.epochs - 1:
-                self.validate(epoch)
+                self.validate(epoch , is_visualized_result= self.cfg.is_visualized_result )
 
-    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False , is_visualized_result = False , num_visualized_result = 10):
+    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False , is_visualized_result = False , num_visualized_result = 10 , radius_lidar_point = 2):
         self.cfg.is_eval_conditional = False
         if is_small:
             self.val_loader = build_dataloader(self.cfg.dataset.test, self.cfg, is_train=True)
@@ -161,6 +166,14 @@ class Runner(object):
         list_cls_w_conf_f1 = []
         list_cls_w_conf_f1_strict = []
 
+        if is_visualized_result == True :
+            number_of_total_frame = len( self.val_loader )
+            list_of_visualized_result = np.linspace( 0 , number_of_total_frame - 1 , num_visualized_result )
+
+            name_of_visualization_folder = "./" + str( self.cfg.experiment_name ) + "/" + "validation_visualization/"
+
+            os.makedirs( name_of_visualization_folder , exist_ok= True )
+
         for i, data in enumerate(self.val_loader):
 
             if is_small:
@@ -172,6 +185,8 @@ class Runner(object):
                 output = self.net(data)
 
                 lane_maps = output['lane_maps']
+                
+                list_of_visualized_prediction_image = []
 
                 for batch_idx in range(len(output['conf'])):
                     conf_label = lane_maps['conf_label'][batch_idx]
@@ -181,8 +196,8 @@ class Runner(object):
                     cls_idx = lane_maps['cls_idx'][batch_idx]
                     conf_cls_idx = lane_maps['conf_cls_idx'][batch_idx]
 
-                    print( "Shape of Confidence Label is : " + str( conf_label.shape ))
-                    print( "Shape of Confidence prediction is : " + str( conf_pred.shape ))
+                    #print( "Shape of Confidence Label is : " + str( conf_label.shape ))
+                    #print( "Shape of Confidence prediction is : " + str( conf_pred.shape ))
 
                     _, _, _, f1 = calc_measures(conf_label, conf_pred, 'conf' , image_size= self.cfg.image_size)
                     _, _, _, f1_strict = calc_measures(conf_label, conf_pred, 'conf', is_wo_offset=True , image_size= self.cfg.image_size)
@@ -204,28 +219,68 @@ class Runner(object):
                     list_cls_w_conf_f1.append(f1)
                     list_cls_w_conf_f1_strict.append(f1_strict)
 
-            self.val_bar.update(1)
+                    if is_visualized_result == True :
 
-        metric = np.mean(list_conf_f1)
-        if metric > self.metric:
-            self.metric = metric
-            self.save_ckpt(epoch, is_best=True)
+                        if i in list_of_visualized_result :
 
-        ### Logging ###
-        conf_f1 = np.mean(list_conf_f1)
-        conf_f1_strict = np.mean(list_conf_f1_strict)
-        conf_by_cls_f1 = np.mean(list_conf_by_cls_f1)
-        conf_by_cls_f1_strict = np.mean(list_conf_by_cls_f1_strict)
-        cls_f1 = np.mean(list_cls_f1)
-        cls_f1_strict = np.mean(list_cls_f1_strict)
-        cls_w_conf_f1 = np.mean(list_cls_w_conf_f1)
-        cls_w_conf_f1_strict = np.mean(list_cls_w_conf_f1_strict)
+                            height_of_image , width_of_image = conf_label[0].shape
 
-        log_val = f'epoch = {epoch}, F1 Score confidence : {conf_f1}, F1 Score Strict Confidence : {conf_f1_strict}, F1 Score Confidence per Class : {conf_by_cls_f1}, F1 Score Confidence Strict per Class : {conf_by_cls_f1_strict}, F1 Classification : {cls_f1}, F1 Classification Strict : {cls_f1_strict}, F1 Classification with Confidence : {cls_w_conf_f1}, F1 Classification with Confidence Strict : {cls_w_conf_f1_strict}'
-        print( "Validation result : " + str( log_val ) + "/n========================================")
-        self.write_to_log(log_val + '\n', os.path.join(self.log_dir, 'val.txt'))
-        self.val_info_bar.set_description_str(log_val)
-        ### Logging ###
+                            road_detection_label = np.array( lane_maps['conf_label'][batch_idx][0] )
+
+                            road_detection_prediction = np.array( lane_maps[ "conf_pred" ][ batch_idx ][0] )
+
+                            # Change image to RGB image with red color as drivable area
+
+                            road_detection_label_with_color = [[[0, i* 255 , 0] for i in j ] for j in road_detection_label]
+
+                            road_detection_prediction_with_color = [[[0, i* 255 , 0] for i in j ] for j in road_detection_prediction]
+
+                            lidar_points_data = data[ "lidar_data" ]
+
+                            for lidar_point in lidar_points_data :
+
+                                road_detection_label_with_color = cv2.circle(road_detection_label_with_color, ( int( (lidar_point[0] + width_of_image/2), int( (lidar_point[1] + height_of_image*7/12)), radius_lidar_point, ( 0 , 0 , 100 + ( lidar_point[2] - 10 )* 3 , -1))))
+
+                                road_detection_prediction_with_color = cv2.circle(road_detection_prediction_with_color, ( int( (lidar_point[0] + width_of_image/2), int( (lidar_point[1] + height_of_image*7/12)), radius_lidar_point, ( 0 , 0 , 100 + ( lidar_point[2] - 10 )* 3 , -1))))
+
+                            #resize, first image
+                            image1 = Image.fromarray( road_detection_label_with_color ).resize((1200 , 1000))
+                            image2 = Image.fromarray( road_detection_prediction_with_color ).resize( ( 1200,100 ))
+                            image1_size = image1.size
+                            image2_size = image2.size
+                            new_image = Image.new('RGB',(image1_size[0] + image2_size[0], image1_size[1]), (250,250,250))
+                            new_image.paste(image1,(0,0))
+                            new_image.paste(image2,( image1_size[0], 0 ))
+
+                            list_of_visualized_result.append( np.array( new_image ) )
+
+                
+
+        
+        # Save visualized validation to folder
+                            
+        if is_visualized_result == True :
+
+            # Visualizing some Lane Detection dataset
+    
+            sns.set_theme()
+
+            f, axarr = plt.subplots( len( list_of_visualized_prediction_image ), figsize = ( 20 , 30 ))
+            
+            plt.axis('off')
+
+            for i in range( len( list_of_visualized_prediction_image) ):
+
+                axarr[ i ].imshow(  list_of_visualized_prediction_image[i] )
+                axarr[ i ].set_title( "Lane Image Data Label and Prediction Data : " + str( list_of_visualized_result[ i ]) )
+                axarr[ i ].set_axis_off()
+                
+
+            f.tight_layout()
+            #plt.show()
+            plt.savefig( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png" )
+            print( "Save image visualization to : " + str( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png"   ))
+                
     
     def save_ckpt(self, epoch, is_best=False):
         save_model(self.net, self.optimizer, self.scheduler, epoch, self.cfg.log_dir, is_best=is_best)

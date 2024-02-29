@@ -2,6 +2,7 @@
 #######################
 *.pkl
 *.npy
+*,pth
 
 # We'll ignore all of the following:
 

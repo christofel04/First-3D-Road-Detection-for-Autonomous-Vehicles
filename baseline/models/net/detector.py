@@ -18,6 +18,7 @@ class Detector(nn.Module):
         self.heads = build_heads(cfg)
         self.head_type = head_type
         self.loss_type = loss_type
+        
 
     def forward(self, batch, is_get_features=False):
         output = {}

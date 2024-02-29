@@ -23,6 +23,8 @@ def main():
     cfg = Config.fromfile(path_config)
     cfg.log_dir = cfg.log_dir + '/' + time_log
     cfg.time_log = time_log
+    cfg.experiment_name = "{}_{}".format( cfg.name_of_experiment , cfg.time_log ) 
+
     os.makedirs(cfg.log_dir, exist_ok=True)
     shutil.copyfile(path_config, cfg.log_dir + '/' + path_split[-2]
                         + '_' + path_split[-1].split('.')[0] + '.txt')
