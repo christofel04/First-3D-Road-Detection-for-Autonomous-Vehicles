@@ -136,7 +136,7 @@ class Runner(object):
             if (epoch + 1) % self.cfg.eval_ep == 0 or epoch == self.cfg.epochs - 1:
                 self.validate(epoch)
 
-    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False):
+    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False , is_visualized_result = False , num_visualized_result = 10):
         self.cfg.is_eval_conditional = False
         if is_small:
             self.val_loader = build_dataloader(self.cfg.dataset.test, self.cfg, is_train=True)

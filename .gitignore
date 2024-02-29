@@ -1,0 +1,3 @@
+*.ckpt
+*logs*
+*tensorboard_dir*

@@ -291,7 +291,7 @@ class GridSeg(nn.Module):
         for batch_idx in range(batch_size):
             cls_label = data['label'][batch_idx].cpu().numpy()
 
-            print( "Shape of the Label is " + str( cls_label.shape ))
+            #print( "Shape of the Label is " + str( cls_label.shape ))
             conf_label = np.where(cls_label == 255, 0, 1)
 
             conf_pred_raw = output['conf'][batch_idx].cpu().numpy()
@@ -300,7 +300,7 @@ class GridSeg(nn.Module):
             conf_pred = np.where(conf_pred_raw > self.cfg.conf_thr, 1, 0)
             cls_pred_raw = torch.nn.functional.softmax(output['cls'][batch_idx], dim=0)
             cls_pred_raw = cls_pred_raw.cpu().numpy()
-            print( "Shape of the Predicted Label is : " + str( cls_pred_raw.shape ))
+            #print( "Shape of the Predicted Label is : " + str( cls_pred_raw.shape ))
             if is_flip:
                 cls_pred_raw = np.flip(np.flip(cls_pred_raw, 1),2)
             cls_idx = np.argmax(cls_pred_raw, axis=0)
