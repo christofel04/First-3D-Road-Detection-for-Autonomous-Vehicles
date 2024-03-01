@@ -49,4 +49,4 @@ tests/test_data/mot16_scenario_*.txt
 *logs*
 *tensorboard_dir*
 
-*/log*
+#*/log*
