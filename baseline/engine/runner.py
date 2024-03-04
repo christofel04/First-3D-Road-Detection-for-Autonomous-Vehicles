@@ -141,7 +141,7 @@ class Runner(object):
             if (epoch + 1) % self.cfg.eval_ep == 0 or epoch == self.cfg.epochs - 1:
                 self.validate(epoch , is_visualized_result= self.cfg.is_visualized_result )
 
-    def validate(self, epoch=None, is_small=False, valid_samples=40 , is_segmentation_only = False , is_visualized_result = False , num_visualized_result = 10 , radius_lidar_point = 2):
+    def validate(self, epoch=None, is_small=False, valid_samples=100 , is_visualized_result = False , is_save_visualization = True , num_visualized_result = 10 , radius_lidar_point = 2):
         self.cfg.is_eval_conditional = False
         if is_small:
             self.val_loader = build_dataloader(self.cfg.dataset.test, self.cfg, is_train=True)
@@ -167,14 +167,18 @@ class Runner(object):
         list_cls_w_conf_f1_strict = []
 
         if is_visualized_result == True :
-            number_of_total_frame = len( self.val_loader )
+            number_of_total_frame = valid_samples #len( self.val_loader )
             list_of_visualized_result = np.linspace( 0 , number_of_total_frame - 1 , num_visualized_result )
 
             name_of_visualization_folder = "./" + str( self.cfg.experiment_name ) + "/" + "validation_visualization/"
 
             os.makedirs( name_of_visualization_folder , exist_ok= True )
 
+            list_of_visualized_prediction_image = []
+
         for i, data in enumerate(self.val_loader):
+
+            #print( "Process data number : " + str( i ))
 
             if is_small:
                 if i>valid_samples:
@@ -185,8 +189,6 @@ class Runner(object):
                 output = self.net(data)
 
                 lane_maps = output['lane_maps']
-                
-                list_of_visualized_prediction_image = []
 
                 for batch_idx in range(len(output['conf'])):
                     conf_label = lane_maps['conf_label'][batch_idx]
@@ -223,25 +225,44 @@ class Runner(object):
 
                         if i in list_of_visualized_result :
 
-                            height_of_image , width_of_image = conf_label[0].shape
+                            #print( "Shape of confidence label is : " + str( conf_label ) + "with average drivable area : " + str( np.mean( conf_label )))
 
-                            road_detection_label = np.array( lane_maps['conf_label'][batch_idx][0] )
+                            height_of_image , width_of_image = conf_label.shape
 
-                            road_detection_prediction = np.array( lane_maps[ "conf_pred" ][ batch_idx ][0] )
+                            #print( "Heigh of the image is : {} and width : {}".format( height_of_image , width_of_image ))
+
+                            #conf_label = conf_label.reshape( -1 , height_of_image , width_of_image )
+
+                            road_detection_label = np.array( lane_maps['conf_label'][batch_idx] )
+
+                            road_detection_prediction = np.array( lane_maps[ "conf_pred" ][ batch_idx ] )
 
                             # Change image to RGB image with red color as drivable area
 
-                            road_detection_label_with_color = [[[0, i* 255 , 0] for i in j ] for j in road_detection_label]
+                            road_detection_label_with_color = np.array( [[[0, i* 255 , 0] for i in j ] for j in road_detection_label] ).astype(np.uint8)
 
-                            road_detection_prediction_with_color = [[[0, i* 255 , 0] for i in j ] for j in road_detection_prediction]
+                            road_detection_prediction_with_color = np.array( [[[0, i* 255 , 0] for i in j ] for j in road_detection_prediction] ).astype(np.uint8)
+
+                            #print( "Shape of road detection label is : " + str( road_detection_label_with_color.shape ) + " and shape of road detection prediction is : " + str( road_detection_prediction_with_color.shape ))
 
                             lidar_points_data = data[ "lidar_data" ]
 
-                            for lidar_point in lidar_points_data :
+                            #print( "Shape of lidar points is : " + str( lidar_points_data.shape ))
 
-                                road_detection_label_with_color = cv2.circle(road_detection_label_with_color, ( int( (lidar_point[0] + width_of_image/2), int( (lidar_point[1] + height_of_image*7/12)), radius_lidar_point, ( 0 , 0 , 100 + ( lidar_point[2] - 10 )* 3 , -1))))
+                            for i, lidar_point in enumerate( torch.squeeze( lidar_points_data )) :
 
-                                road_detection_prediction_with_color = cv2.circle(road_detection_prediction_with_color, ( int( (lidar_point[0] + width_of_image/2), int( (lidar_point[1] + height_of_image*7/12)), radius_lidar_point, ( 0 , 0 , 100 + ( lidar_point[2] - 10 )* 3 , -1))))
+                                #print( "Lidar point is : " + str( lidar_point ))
+
+                                if (( lidar_point[0] >= -width_of_image/2 ) and
+                                    ( lidar_point[0] <= width_of_image/2 ) and
+                                    ( lidar_point[1] >= -height_of_image*5/12) and 
+                                    ( lidar_point[1] <= height_of_image*7/12 )) : 
+
+                                    #print( "Writes lidar point number : " + str( i )) 
+
+                                    road_detection_label_with_color = cv2.circle(road_detection_label_with_color,  ( int( (lidar_point[0] + width_of_image/2)), int( (lidar_point[1] + height_of_image*7/12))), radius_lidar_point, ( 0 , 0 , int(100 + ( -lidar_point[2] - 10 )* 3 )))
+
+                                    road_detection_prediction_with_color = cv2.circle(road_detection_prediction_with_color, ( int( (lidar_point[0] + width_of_image/2)), int( (lidar_point[1] + height_of_image*7/12))), radius_lidar_point, ( 0 , 0 , int( 100 + ( -lidar_point[2] - 10 )* 3 )))
 
                             #resize, first image
                             image1 = Image.fromarray( road_detection_label_with_color ).resize((1200 , 1000))
@@ -252,14 +273,14 @@ class Runner(object):
                             new_image.paste(image1,(0,0))
                             new_image.paste(image2,( image1_size[0], 0 ))
 
-                            list_of_visualized_result.append( np.array( new_image ) )
+                            list_of_visualized_prediction_image.append( np.array( new_image ) )
 
                 
 
         
         # Save visualized validation to folder
                             
-        if is_visualized_result == True :
+        if ( is_visualized_result == True ) :
 
             # Visualizing some Lane Detection dataset
     
@@ -278,8 +299,12 @@ class Runner(object):
 
             f.tight_layout()
             #plt.show()
-            plt.savefig( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png" )
-            print( "Save image visualization to : " + str( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png"   ))
+
+            if is_save_visualization == True : 
+                plt.savefig( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png" )
+                print( "Save image visualization to : " + str( name_of_visualization_folder + "visualization_epoch_" + str( epoch ) + ".png"   ))
+
+            return plt
                 
     
     def save_ckpt(self, epoch, is_best=False):
@@ -324,7 +349,13 @@ class Runner(object):
     
     def load_ckpt(self, path_ckpt):
         trained_model = torch.load(path_ckpt)
-        self.net.load_state_dict(trained_model['net'], strict=True)
+
+        #remove_prefix = 'module.'
+        #trained_model["net"] = {k[len(remove_prefix):] if k.startswith(remove_prefix) else k: v for k, v in trained_model["net"].items()}
+        
+        #print( "List of trained model keys : " + str( trained_model["net"].keys()))
+
+        self.net.load_state_dict(trained_model['net'], strict= False )#strict=True)
 
     def process_one_sample(self, sample, is_calc_f1=False, is_get_features=False, is_measure_ms=False, is_get_attention_score=False):
         self.net.eval()

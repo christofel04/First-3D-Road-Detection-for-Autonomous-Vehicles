@@ -573,7 +573,7 @@ Total bounding box: {sum(num_annotations)}
         sample[ "pillars" ] = bev_tensor_pillar
         sample[ "pillar_indices"] =  bev_tensor_pillar_indices
 
-        sample[ "lidar_data" ] = self.get_lidar_in_rasterized_map_coordinate(key= key_in_current_log)
+        sample[ "lidar_data" ] = self.get_lidar_in_rasterized_map_coordinate(idx= key_in_current_log)
 
         with open( self.get_drivable_area_label_from_pickle( key_in_current_log ) , "rb" ) as f :
 
