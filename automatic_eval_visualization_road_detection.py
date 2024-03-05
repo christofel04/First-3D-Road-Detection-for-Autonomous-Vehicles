@@ -50,7 +50,7 @@ def main() :
 
             print( "Evaluating road detection epoch : " + str( epoch_eval ))
 
-            validate_visualization = runner.validate( epoch = epoch_eval , is_visualized_result= True , is_save_visualization= False )
+            validate_visualization = runner.validate( epoch = epoch_eval , is_small= True , valid_samples= 100, is_visualized_result= True , is_save_visualization= False )
 
             validate_visualization.savefig( NAME_OF_FOLDER_VISUALIZATION_RESULT + "evaluation_visualization_" + str( epoch_eval ) + ".png" )
 

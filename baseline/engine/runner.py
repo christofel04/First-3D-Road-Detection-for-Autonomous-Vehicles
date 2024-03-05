@@ -168,7 +168,7 @@ class Runner(object):
 
         if is_visualized_result == True :
             number_of_total_frame = valid_samples #len( self.val_loader )
-            list_of_visualized_result = np.linspace( 0 , number_of_total_frame - 1 , num_visualized_result )
+            list_of_visualized_result = np.linspace( 10 , number_of_total_frame - 1 , num_visualized_result ).astype( int )
 
             name_of_visualization_folder = "./" + str( self.cfg.experiment_name ) + "/" + "validation_visualization/"
 
@@ -233,25 +233,27 @@ class Runner(object):
 
                             #conf_label = conf_label.reshape( -1 , height_of_image , width_of_image )
 
-                            road_detection_label = np.array( lane_maps['conf_label'][batch_idx] )
+                            road_detection_label = np.array( data[ "label" ][batch_idx].cpu() )
 
-                            road_detection_prediction = np.array( lane_maps[ "conf_pred" ][ batch_idx ] )
+                            road_detection_prediction = np.array( lane_maps[ "cls_pred_raw" ][ batch_idx ][0] )
 
                             # Change image to RGB image with red color as drivable area
 
-                            road_detection_label_with_color = np.array( [[[0, i* 255 , 0] for i in j ] for j in road_detection_label] ).astype(np.uint8)
+                            road_detection_label_with_color = np.array( [[[0, 255 , 0] if i == 1 else [ 255 , 255 , 255 ] for i in j ] for j in road_detection_label] ).astype(np.uint8)
 
-                            road_detection_prediction_with_color = np.array( [[[0, i* 255 , 0] for i in j ] for j in road_detection_prediction] ).astype(np.uint8)
+                            road_detection_prediction_with_color = np.array( [[[0, ( 1 - i )* 255 , 0] for i in j] for j in road_detection_prediction] ).astype(np.uint8)
 
                             #print( "Shape of road detection label is : " + str( road_detection_label_with_color.shape ) + " and shape of road detection prediction is : " + str( road_detection_prediction_with_color.shape ))
 
-                            lidar_points_data = data[ "lidar_data" ]
+                            lidar_points_data = torch.squeeze( data[ "lidar_data" ] )
+
+                            lidar_points_data = torch.concatenate( [ lidar_points_data[ : , 0 ]* ( 1 / self.cfg.list_grid_xy[0] ) , lidar_points_data[ : , 1 ]* ( 1/ self.cfg.list_grid_xy[1] ) , lidar_points_data[ : ,2 : ]], dim= 1 )
 
                             #print( "Shape of lidar points is : " + str( lidar_points_data.shape ))
 
                             for i, lidar_point in enumerate( torch.squeeze( lidar_points_data )) :
 
-                                #print( "Lidar point is : " + str( lidar_point ))
+                                print( "Lidar point is : " + str( lidar_point ))
 
                                 if (( lidar_point[0] >= -width_of_image/2 ) and
                                     ( lidar_point[0] <= width_of_image/2 ) and
@@ -265,8 +267,9 @@ class Runner(object):
                                     road_detection_prediction_with_color = cv2.circle(road_detection_prediction_with_color, ( int( (lidar_point[0] + width_of_image/2)), int( (lidar_point[1] + height_of_image*7/12))), radius_lidar_point, ( 0 , 0 , int( 100 + ( -lidar_point[2] - 10 )* 3 )))
 
                             #resize, first image
-                            image1 = Image.fromarray( road_detection_label_with_color ).resize((1200 , 1000))
-                            image2 = Image.fromarray( road_detection_prediction_with_color ).resize( ( 1200,100 ))
+                            image1 = Image.fromarray( road_detection_label_with_color ).resize((1000 , 1200))
+                            image2 = Image.fromarray( road_detection_prediction_with_color ).resize( ( 1000,1200 ))
+                            print( "Size of prediction image is : " + str( np.array( image2 ).shape ))
                             image1_size = image1.size
                             image2_size = image2.size
                             new_image = Image.new('RGB',(image1_size[0] + image2_size[0], image1_size[1]), (250,250,250))
@@ -274,6 +277,8 @@ class Runner(object):
                             new_image.paste(image2,( image1_size[0], 0 ))
 
                             list_of_visualized_prediction_image.append( np.array( new_image ) )
+
+            self.val_bar.update( 1 )
 
                 
 
@@ -288,6 +293,7 @@ class Runner(object):
 
             f, axarr = plt.subplots( len( list_of_visualized_prediction_image ), figsize = ( 20 , 30 ))
             
+            plt.title( "Visualization of Road Detection Epoch : {}".format( epoch ))
             plt.axis('off')
 
             for i in range( len( list_of_visualized_prediction_image) ):

@@ -166,8 +166,14 @@ class ArgoverseRoadDetection:
             self._log_list = [x for x in os.listdir(self.root_dir) if valid_log(x)]
             
             if self.max_number_of_log :
+
+                if isinstance( self.max_number_of_log , int ) :
             
-            	self._log_list = self._log_list[ : self.max_number_of_log ]
+            	    self._log_list = self._log_list[ : self.max_number_of_log ]
+                
+                else :
+
+                    self._log_list = self._log_list[ int( self.max_number_of_log[0] ) : int( self.max_number_of_log[1] ) ]
 
         return self._log_list
 
@@ -573,7 +579,7 @@ Total bounding box: {sum(num_annotations)}
         sample[ "pillars" ] = bev_tensor_pillar
         sample[ "pillar_indices"] =  bev_tensor_pillar_indices
 
-        sample[ "lidar_data" ] = self.get_lidar_in_rasterized_map_coordinate(idx= key_in_current_log)
+        sample[ "lidar_data" ] = self.get_lidar_in_rasterized_map_coordinate(idx= key_in_current_log , log_id= self.current_log)
 
         with open( self.get_drivable_area_label_from_pickle( key_in_current_log ) , "rb" ) as f :
 
